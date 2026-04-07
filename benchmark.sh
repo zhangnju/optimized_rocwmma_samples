@@ -55,7 +55,14 @@ done
 export HIP_VISIBLE_DEVICES="${GPU_INDEX}"
 CSV_FILE="${OUTPUT_FILE%.txt}.csv"
 
-GPU_NAME=$(rocminfo 2>/dev/null | grep "Marketing Name" | head -1 | awk -F: '{print $2}' | xargs || echo "unknown")
+# First "Marketing Name" is often the host CPU; pick the first GPU agent name.
+GPU_NAME=$(rocminfo 2>/dev/null | awk -F': ' '
+/Marketing Name/ {
+    n=$2; gsub(/^[ \t]+/,"",n);
+    if (n !~ /Threadripper|Ryzen|EPYC|Xeon|Core i[0-9]|Pentium|Celeron|CPU/) { print n; exit }
+}' | xargs)
+[[ -z "${GPU_NAME}" ]] && GPU_NAME=$(rocminfo 2>/dev/null | grep "Marketing Name" | head -1 | awk -F: '{print $2}' | xargs || echo "unknown")
+[[ -z "${GPU_NAME}" ]] && GPU_NAME="unknown"
 GPU_ARCH=$(rocminfo 2>/dev/null | grep -oP 'gfx\d+' | head -1 || echo "unknown")
 ROCM_VER=$(cat /opt/rocm/.info/version 2>/dev/null || rocm-smi --version 2>/dev/null | grep -oP '[\d.]+' | head -1 || echo "unknown")
 TS=$(date '+%Y-%m-%d %H:%M:%S')

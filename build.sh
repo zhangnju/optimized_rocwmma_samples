@@ -107,6 +107,7 @@ cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
     -DCMAKE_CXX_COMPILER="${CXX_COMPILER}" \
     "-DROCWMMA_INCLUDE_DIR=${ROCWMMA_INCLUDE}" \
     2>&1 | grep -E "^--|error:|GPU_TARGETS|rocwmma|hiprtc|HIP runtime"
+[[ -f "${BUILD_DIR}/CMakeCache.txt" ]] || { echo "[ERROR] CMake configuration failed (no CMakeCache.txt). Re-run cmake without grep to see errors."; exit 1; }
 
 echo ""
 echo "[INFO] Building: ${BUILD_TARGET} (-j${JOBS})..."

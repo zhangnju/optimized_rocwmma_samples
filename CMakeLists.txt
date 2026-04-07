@@ -114,6 +114,18 @@ message(STATUS "samples include (common.hpp): ${SAMPLES_INCLUDE_DIR}")
 # ---------------------------------------------------------------------------
 # Find HIP runtime (for hiprtc, hipEvent_t, etc.)
 # ---------------------------------------------------------------------------
+# Ensure CMake can locate HIPConfig.cmake from a standard ROCm install.
+if(DEFINED ENV{ROCM_PATH})
+    list(PREPEND CMAKE_PREFIX_PATH "$ENV{ROCM_PATH}")
+else()
+    foreach(_rocm "/opt/rocm" "/opt/rocm-7.2.0")
+        if(EXISTS "${_rocm}/lib/cmake/hip/hip-config.cmake")
+            list(PREPEND CMAKE_PREFIX_PATH "${_rocm}")
+            break()
+        endif()
+    endforeach()
+endif()
+
 find_package(HIP REQUIRED)
 
 # HIP runtime library (amdhip64)

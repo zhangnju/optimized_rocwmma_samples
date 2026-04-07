@@ -2,22 +2,25 @@
 
 ## Overview
 
-This document covers the core optimization techniques, code analysis, and MI355X benchmark results
+This document covers the core optimization techniques, code analysis, and benchmark results (MI355X and Radeon AI PRO R9700)
 for 26 GPU kernel samples ported from CK Tile (ComposableKernel Tile) using the rocWMMA API.
 
 All samples are located at: `rocwmma/samples/community/rocwmma_*.cpp`
 
-**Test Environment:**
+**Test environments (community samples in this repo):**
 
-| Item | Spec |
-|---|---|
-| GPU | AMD Instinct MI355X (×8) |
-| Architecture | gfx950 (CDNA 3.5), 256 CUs, 2400 MHz |
-| ROCm | 7.2.0 |
-| Compiler | AMD Clang 22.0.0 (HIP 7.2) |
-| rocWMMA | 2.2.0 |
-| FP16 Peak | ~1300 TFlops/s |
-| FP8 Peak | ~2600 TFlops/s |
+| Item | MI355X (gfx950) | Radeon AI PRO R9700 (gfx1201) |
+|---|---|---|
+| **GPU** | AMD Instinct MI355X (×8) | AMD Radeon AI PRO R9700 |
+| **Architecture** | CDNA 3.5, 256 CUs, 2400 MHz | RDNA 4, 64 CUs, Wave32, WMMA 16×16×16 (boost up to 2.92 GHz) |
+| **ROCm** | 7.2.0 | 7.2.0 |
+| **Compiler** | AMD Clang 22.0.0 (HIP 7.2) | AMD Clang 22.0.0 (HIP 7.2) |
+| **rocWMMA** | 2.2.0 | 2.2.0 |
+| **FP16 peak (matrix)** | ~1300 TFlops/s (CDNA MFMA class) | **191** TFlops/s ([AMD specs](https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html), FP16 matrix) |
+| **FP8 peak (matrix, E4M3/E5M2)** | ~2600 TFlops/s (CDNA class) | **383** TFlops/s (same source, FP8 matrix) |
+| **Sample benchmark** | See §11 (MI355X tables) | Measured **2026-04-07**; log `benchmark_results_r9700_gfx1201.txt` / `.csv` |
+
+Measured kernel throughputs for both GPUs are in **[Section 11](#11-complete-performance-data)** (MI355X first, R9700 second in each subsection). Manufacturer peaks are theoretical upper bounds; achievable TFlops depend on kernel and memory behavior.
 
 ---
 
@@ -34,7 +37,7 @@ All samples are located at: `rocwmma/samples/community/rocwmma_*.cpp`
 8. [Online Softmax (Flash Attention)](#8-online-softmax-flash-attention)
 9. [FlatMM: Register-Direct Load of B](#9-flatmm-register-direct-load-of-b)
 10. [Stream-K Load Balancing](#10-stream-k-load-balancing)
-11. [MI355X Complete Performance Data](#11-mi355x-complete-performance-data)
+11. [Complete Performance Data (MI355X gfx950 & R9700 gfx1201)](#11-complete-performance-data)
 12. [CK Tile vs rocWMMA Full Comparison (Including Elementwise/Pooling/Contraction)](#12-ck-tile-vs-rocwmma-full-comparison-mi355x--gfx950)
 
 ---
@@ -71,6 +74,9 @@ cd rocwmma/samples/community
 
 # 2) Specify MI355X (gfx950), build all samples
 ./build.sh -g gfx950
+
+# 2b) AMD Radeon AI PRO R9700 / RDNA 4 (gfx1201)
+./build.sh -g gfx1201
 
 # 3) Multi-GPU targets (MI355X + RDNA4), build simultaneously
 ./build.sh -g "gfx950;gfx1200;gfx1201"
@@ -977,9 +983,15 @@ Stream-K (K=4096, MT_K=16):
 
 ---
 
-## 11. MI355X Complete Performance Data
+## 11. Complete Performance Data
+
+Measured on **AMD Instinct MI355X (gfx950, CDNA 3.5)** unless noted otherwise, and on **AMD Radeon AI PRO R9700 (gfx1201, RDNA 4)** (benchmark **2026-04-07**, logs `benchmark_results_r9700_gfx1201.txt` / `.csv`). In subsections **11.1–11.6**, **MI355X** tables appear first, then **R9700**. Section **11.7** compares CK Tile vs rocWMMA on MI355X only. **11.8** lists build/benchmark commands for both GPUs.
+
+**HGEMM on RDNA 4:** On gfx1201, **Pipeline V1 is often faster than V2 double-buffer** for square sizes in `rocwmma_perf_gemm` (unlike MI355X); tune per shape.
 
 ### 11.1 GEMM
+
+**MI355X (gfx950)**
 
 #### Standard HGEMM (FP16 input, FP32 accumulation, FP16 output)
 
@@ -1087,9 +1099,99 @@ Stream-K (K=4096, MT_K=16):
 | 8  | 512  | 512  | 2048 | 3.8 |
 | 16 | 256  | 256  | 4096 | 1.2 |
 
+**Radeon AI PRO R9700 (gfx1201)**
+
+#### Standard HGEMM (FP16 in, FP32 acc, FP16 out) — `rocwmma_perf_gemm.cpp`
+
+| M | N | K | V1 Sequential | V2 Double-Buffer | Comment |
+|---|---|---|---|---|---|
+| 3840 | 4096 | 4096 | **130** TF/s | 118 TF/s | V1 faster |
+| 4096 | 4096 | 4096 | **132** TF/s | 120 TF/s | V1 faster |
+| 8192 | 8192 | 8192 | **133** TF/s | 123 TF/s | V1 faster |
+| 1024 | 4096 | 8192 | **115** TF/s | 114 TF/s | ~tie |
+| 4096 | 1024 | 8192 | 105 TF/s | **118** TF/s | V2 faster |
+
+#### Split-K GEMM — `rocwmma_gemm_splitk.cpp`
+
+| M | N | K | split_k | TFlops/s |
+|---|---|---|---|---|
+| 512 | 512 | 16384 | 4 | 1.56 |
+| 1024 | 1024 | 16384 | 8 | 0.80 |
+| 2048 | 2048 | 8192 | 4 | 0.80 |
+| 4096 | 4096 | 4096 | 2 | 0.80 |
+
+#### FP8 quantized GEMM — `rocwmma_gemm_quantized.cpp`
+
+| M | N | K | TFlops/s |
+|---|---|---|---|
+| 3840 | 4096 | 4096 | 2.39 |
+| 4096 | 4096 | 4096 | 2.39 |
+| 8192 | 8192 | 8192 | 5.13 |
+
+#### MX-format GEMM — `rocwmma_mx_gemm.cpp` (runs on gfx1201; binary may print “gfx950 native”)
+
+| M | N | K | MX_BLOCK | TFlops/s |
+|---|---|---|---|---|
+| 3840 | 4096 | 4096 | 32 | 3.09 |
+| 4096 | 4096 | 4096 | 32 | 3.09 |
+| 8192 | 8192 | 8192 | 32 | 5.73 |
+
+#### GEMM + fused epilogue — `rocwmma_gemm_multi_d.cpp`
+
+| M | N | K | ReLU | TFlops/s |
+|---|---|---|---|---|
+| 3840 | 4096 | 4096 | No | 14.6 |
+| 4096 | 4096 | 4096 | Yes | 13.8 |
+| 8192 | 8192 | 8192 | Yes | 16.8 |
+
+#### Batched GEMM — `rocwmma_batched_gemm.cpp`
+
+| batch | M | N | K | TFlops/s (per batch) | Total effective TFlops/s |
+|---|---|---|---|---|---|
+| 4 | 1024 | 1024 | 1024 | 15.4 | 61.8 |
+| 8 | 512 | 512 | 2048 | 9.15 | 73.2 |
+| 16 | 256 | 256 | 4096 | 3.85 | 61.6 |
+
+#### Grouped GEMM — `rocwmma_grouped_gemm.cpp`
+
+| G | Group sizes | Total TFlops/s |
+|---|---|---|
+| 4 | 256/512/128/768 × 4096 × 4096 (mixed) | 2.65 |
+| 4 | 1024 × 4096 × 4096 (uniform) | 2.66 |
+| 3 | 512×1024/2048/4096 × 2048 | 1.38 |
+
+#### Stream-K GEMM — `rocwmma_streamk_gemm.cpp` (num_cus=32 in sample)
+
+| M | N | K | TFlops/s |
+|---|---|---|---|
+| 512 | 512 | 4096 | 2.51 |
+| 1024 | 1024 | 4096 | 4.90 |
+| 2048 | 2048 | 4096 | 5.63 |
+| 4096 | 4096 | 4096 | 5.52 |
+
+#### FlatMM — `rocwmma_flatmm.cpp`
+
+| M | N | K | LDS | TFlops/s |
+|---|---|---|---|---|
+| 128 | 4096 | 4096 | 8 KB (A only) | 3.10 |
+| 256 | 4096 | 4096 | 8 KB | 2.40 |
+| 512 | 4096 | 4096 | 8 KB | 2.46 |
+| 1024 | 4096 | 4096 | 8 KB | 2.58 |
+| 4096 | 4096 | 4096 | 8 KB | 2.65 |
+
+#### Batched tensor contraction — `rocwmma_batched_contraction.cpp`
+
+| G | M | N | K | TFlops/s (per group) |
+|---|---|---|---|---|
+| 4 | 1024 | 1024 | 1024 | 0.22 |
+| 8 | 512 | 512 | 2048 | 0.21 |
+| 16 | 256 | 256 | 4096 | 0.20 |
+
 ---
 
 ### 11.2 Attention
+
+**MI355X (gfx950)**
 
 #### Flash Attention Forward
 
@@ -1111,9 +1213,29 @@ Stream-K (K=4096, MT_K=16):
 | 4 | 32 | 4096 | 128 | 27.5% | 1125/4096  | 68.9 |
 | 4 | 32 | 8192 | 128 | 14.3% | 2341/16384 | **71.6** |
 
+**Radeon AI PRO R9700 (gfx1201)**
+
+#### Flash Attention forward — `rocwmma_fmha_fwd.cpp`
+
+| B | H | Sq | Sk | D | Causal | TFlops/s |
+|---|---|---|---|---|---|---|
+| 4 | 32 | 2048 | 2048 | 128 | No | 19.3 |
+| 4 | 32 | 2048 | 2048 | 128 | Yes | **36.4** |
+| 1 | 32 | 4096 | 4096 | 128 | Yes | **36.8** |
+
+#### Sparse attention — `rocwmma_sparse_attn.cpp`
+
+| B | H | Sq/Sk | D | Density | Active tile pairs | TFlops/s |
+|---|---|---|---|---|---|---|
+| 4 | 32 | 2048 | 128 | 79.4% | 813/1024 | 6.28 |
+| 4 | 32 | 4096 | 128 | 27.5% | 1125/4096 | 5.42 |
+| 4 | 32 | 8192 | 128 | 14.3% | 2341/16384 | 5.62 |
+
 ---
 
 ### 11.3 Normalization
+
+**MI355X (gfx950)**
 
 #### LayerNorm 2D (Welford online variance + vectorized IO)
 
@@ -1147,9 +1269,39 @@ Stream-K (K=4096, MT_K=16):
 | 3328 | 4096 | **3929 GB/s** |
 | 3328 | 8192 | 4069 GB/s |
 
+**Radeon AI PRO R9700 (gfx1201)**
+
+#### LayerNorm 2D — `rocwmma_layernorm2d.cpp`
+
+| M | N | Bandwidth |
+|---|---|---|
+| 3328 | 1024 | 238 GB/s |
+| 3328 | 2048 | 480 GB/s |
+| 3328 | 4096 | **548** GB/s |
+| 3328 | 8192 | 426 GB/s |
+
+#### RMSNorm 2D — `rocwmma_rmsnorm2d.cpp`
+
+| M | N | Operation | Bandwidth |
+|---|---|---|---|
+| 3328 | 4096 | RMSNorm | **1368** GB/s |
+| 3328 | 4096 | Add+RMSNorm | 487 GB/s |
+| 3328 | 8192 | RMSNorm | 477 GB/s |
+
+#### SmoothQuant — `rocwmma_smoothquant.cpp`
+
+| M | N | Bandwidth |
+|---|---|---|
+| 3328 | 1024 | 328 GB/s |
+| 3328 | 2048 | 1010 GB/s |
+| 3328 | 4096 | **1249** GB/s |
+| 3328 | 8192 | 509–551 GB/s |
+
 ---
 
 ### 11.4 MoE
+
+**MI355X (gfx950)**
 
 #### TopK Softmax (warp-per-token)
 
@@ -1190,9 +1342,47 @@ Stream-K (K=4096, MT_K=16):
 |---|---|---|---|---|---|
 | 3328 | 4096 | 14336 | 8 | 2 | **110** |
 
+**Radeon AI PRO R9700 (gfx1201)**
+
+#### TopK Softmax — `rocwmma_topk_softmax.cpp`
+
+| tokens | experts | topk | Bandwidth |
+|---|---|---|---|
+| 3328 | 8 | 2 | 11.6 GB/s |
+| 3328 | 16 | 2 | 17.3 GB/s |
+| 3328 | 32 | 5 | 24.2 GB/s |
+| 3328 | 64 | 5 | 40.1 GB/s |
+
+#### MoE token sorting — `rocwmma_moe_sorting.cpp`
+
+| tokens | experts | topk | Bandwidth |
+|---|---|---|---|
+| 3328 | 8 | 4 | 7.67 GB/s |
+| 3328 | 32 | 4 | 7.50 GB/s |
+| 3328 | 64 | 5 | 8.64 GB/s |
+| 3328 | 128 | 8 | 12.4 GB/s |
+
+#### MoE SmoothQuant — `rocwmma_moe_smoothquant.cpp`
+
+| tokens | hidden | experts | topk | Bandwidth |
+|---|---|---|---|---|
+| 3328 | 4096 | 8 | 2 | **940** GB/s |
+| 3328 | 4096 | 32 | 5 | 430 GB/s |
+| 3328 | 8192 | 64 | 5 | 483 GB/s |
+
+#### Fused MoE — `rocwmma_fused_moe.cpp`
+
+| tokens | hidden | inter | experts | topk | TFlops/s |
+|---|---|---|---|---|---|
+| 3328 | 4096 | 14336 | 8 | 2 | 10.9 |
+| 3328 | 4096 | 14336 | 32 | 5 | 9.56 |
+| 3328 | 7168 | 2048 | 64 | 6 | 17.3 |
+
 ---
 
 ### 11.5 Reduction & Elementwise
+
+**MI355X (gfx950)**
 
 #### Row Reduction (Sum/Max)
 
@@ -1215,9 +1405,30 @@ Stream-K (K=4096, MT_K=16):
 | 3840 | 4096 | Square2D    | 1622 GB/s |
 | 3840 | 4096 | Transpose2D | **2588 GB/s** |
 
+**Radeon AI PRO R9700 (gfx1201)**
+
+#### Row reduction — `rocwmma_reduce.cpp`
+
+| M | N | ReduceSum | ReduceMax |
+|---|---|---|---|
+| 3328 | 1024 | 660 GB/s | 646 GB/s |
+| 3328 | 2048 | 1333 GB/s | 1292 GB/s |
+| 3328 | 4096 | **1747** GB/s | 1715 GB/s |
+| 3328 | 8192 | 1987 GB/s | 1987 GB/s |
+
+#### Elementwise — `rocwmma_elementwise.cpp` (M=3840, N=4096)
+
+| Operation | Bandwidth |
+|---|---|
+| Add2D | 375 GB/s |
+| Square2D | 1367 GB/s |
+| Transpose2D | 260 GB/s |
+
 ---
 
 ### 11.6 Convolution & Data Layout
+
+**MI355X (gfx950)**
 
 #### Grouped Convolution Forward (Im2col + rocWMMA GEMM)
 
@@ -1249,6 +1460,33 @@ Stream-K (K=4096, MT_K=16):
 | 2 | 16×28×28 | 256 | 2×2×2 | **2123 GB/s** | 1999 GB/s |
 | 2 | 8×56×56  | 128 | 3×3×3 | 196 GB/s | 194 GB/s |
 
+**Radeon AI PRO R9700 (gfx1201)**
+
+#### Grouped convolution forward — `rocwmma_grouped_conv_fwd.cpp`
+
+| N | H×W | G | Cin | Cout | K | TFlops/s |
+|---|---|---|---|---|---|---|
+| 8 | 56×56 | 1 | 64 | 64 | 3×3 | 0.18 |
+| 8 | 28×28 | 1 | 128 | 128 | 3×3 | 0.83 |
+| 8 | 14×14 | 1 | 256 | 256 | 3×3 | 2.11 |
+| 8 | 7×7 | 1 | 512 | 512 | 3×3 | 1.47 |
+
+#### Permute — `rocwmma_permute.cpp`
+
+| Operation | Shape | Bandwidth |
+|---|---|---|
+| Transpose2D | 3840×4096 | 515 GB/s |
+| Transpose2D | 4096×4096 | 518 GB/s |
+| Transpose2D | 8192×8192 | 171 GB/s |
+| NCHW→NHWC | N=32, C=128, H=W=64 | **534** GB/s |
+
+#### 3D pooling — `rocwmma_pooling.cpp`
+
+| N | D×H×W | C | K | MaxPool | AvgPool |
+|---|---|---|---|---|---|
+| 2 | 16×28×28 | 256 | 2×2×2 | **552** GB/s | 528 GB/s |
+| 2 | 8×56×56 | 128 | 3×3×3 | 48.4 GB/s | 47.1 GB/s |
+
 ---
 
 ### 11.7 CK Tile vs rocWMMA Comparison (HGEMM, M=N=K=4096)
@@ -1264,6 +1502,22 @@ Stream-K (K=4096, MT_K=16):
 > **Note:** CK Tile uses a 256×256 larger block tile (requiring 64KB LDS) and applies
 > low-level compiler flags like `-mllvm -enable-noalias-to-md-conversion=0`.
 > rocWMMA uses the standard HIP compilation path (128×128 block tile, 16KB LDS).
+
+### 11.8 Reproducing benchmarks (MI355X vs R9700)
+
+```bash
+cd /home/optimized_rocwmma_samples   # or your clone path
+
+# MI355X / CDNA (example target)
+./build.sh -g gfx950
+./benchmark.sh -b build --csv -o benchmark_results_mi355x.txt --timeout 300
+
+# Radeon AI PRO R9700 / RDNA 4 (gfx1201)
+./build.sh -g gfx1201
+./benchmark.sh -b build --csv -o benchmark_results_r9700_gfx1201.txt --timeout 300
+```
+
+Requires CMake ≥3.16 and a full ROCm install (`HIPConfig.cmake` under `$ROCM_PATH/lib/cmake/hip`). This project prepends `/opt/rocm` (or `$ROCM_PATH`) to `CMAKE_PREFIX_PATH` so `find_package(HIP)` works on typical setups.
 
 ---
 
@@ -1579,3 +1833,4 @@ This section provides measured data from running CK Tile original and rocWMMA po
 - CK Tile is the clear leader in **compute-intensive** (large square GEMM) and **codegen-tuned normalization** (LayerNorm, RMSNorm) scenarios
 - rocWMMA performs better in **memory-intensive** (Transpose, Row Reduce) and certain **quantization** (SmoothQuant N≥2048) scenarios
 - For production environments, CK Tile is recommended; rocWMMA samples are ideal for rapid prototyping, education, and RDNA4 porting
+

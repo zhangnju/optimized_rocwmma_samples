@@ -3,21 +3,24 @@
 ## 概述
 
 本文档整理了基于 CK Tile (ComposableKernel Tile) 优化思路，使用 rocWMMA API 移植实现的
-26 个 GPU kernel 样例的核心优化技术、代码解析与 MI355X 实测性能。
+26 个 GPU kernel 样例的核心优化技术、代码解析与 **MI355X、Radeon AI PRO R9700** 等平台上的实测性能。
 
 所有样例位于：`rocwmma/samples/community/rocwmma_*.cpp`
 
-**测试环境：**
+**测试环境（本文档涉及的 community sample）：**
 
-| 项目 | 规格 |
-|---|---|
-| GPU | AMD Instinct MI355X (×8) |
-| 架构 | gfx950 (CDNA 3.5), 256 CUs, 2400 MHz |
-| ROCm | 7.2.0 |
-| 编译器 | AMD Clang 22.0.0 (HIP 7.2) |
-| rocWMMA | 2.2.0 |
-| FP16 理论峰值 | ~1300 TFlops/s |
-| FP8 理论峰值 | ~2600 TFlops/s |
+| 项目 | MI355X（gfx950） | Radeon AI PRO R9700（gfx1201） |
+|---|---|---|
+| **GPU** | AMD Instinct MI355X（×8） | AMD Radeon AI PRO R9700 |
+| **架构** | CDNA 3.5，256 CUs，2400 MHz | RDNA 4，64 CUs，Wave32，WMMA 16×16×16（加速频率最高约 2.92 GHz） |
+| **ROCm** | 7.2.0 | 7.2.0 |
+| **编译器** | AMD Clang 22.0.0（HIP 7.2） | AMD Clang 22.0.0（HIP 7.2） |
+| **rocWMMA** | 2.2.0 | 2.2.0 |
+| **FP16 峰值（矩阵）** | ~1300 TFlops/s（CDNA MFMA 量级） | **191** TFlops/s（[AMD 规格页](https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html)，FP16 matrix） |
+| **FP8 峰值（矩阵，E4M3/E5M2）** | ~2600 TFlops/s（CDNA 量级） | **383** TFlops/s（同上，FP8 matrix） |
+| **样例 benchmark** | 见 §11（MI355X 表） | 测量日期 **2026-04-07**；日志 `benchmark_results_r9700_gfx1201.txt` / `.csv` |
+
+两套 GPU 的实测吞吐均在 **[第 11 节](#11-完整性能数据)**（各小节先 MI355X、后 R9700）。表中峰值为厂商给出的理论上限，实际可达 TFlops 取决于算子与访存。
 
 ---
 
@@ -34,7 +37,7 @@
 8. [Online Softmax（Flash Attention）](#8-online-softmaxflash-attention)
 9. [FlatMM：寄存器直接加载 B](#9-flatmm寄存器直接加载-b)
 10. [Stream-K 负载均衡](#10-stream-k-负载均衡)
-11. [MI355X 完整性能数据](#11-mi355x-完整性能数据)
+11. [完整性能数据（MI355X gfx950 与 R9700 gfx1201）](#11-完整性能数据)
 12. [CK Tile vs rocWMMA 完整性能对比（含 Elementwise/Pooling/Contraction）](#12-ck-tile-vs-rocwmma-完整性能对比mi355x--gfx950)
 
 ---
@@ -71,6 +74,9 @@ cd rocwmma/samples/community
 
 # 2) 指定 MI355X（gfx950），编译所有 sample
 ./build.sh -g gfx950
+
+# 2b) AMD Radeon AI PRO R9700 / RDNA 4（gfx1201）
+./build.sh -g gfx1201
 
 # 3) 多 GPU 目标（MI355X + RDNA4），同时编译
 ./build.sh -g "gfx950;gfx1200;gfx1201"
@@ -977,9 +983,15 @@ Stream-K（K=4096, MT_K=16）：
 
 ---
 
-## 11. MI355X 完整性能数据
+## 11. 完整性能数据
+
+数据分别来自 **AMD Instinct MI355X（gfx950，CDNA 3.5）** 与 **AMD Radeon AI PRO R9700（gfx1201，RDNA 4）**（后者测量 **2026-04-07**，日志 `benchmark_results_r9700_gfx1201.txt` / `.csv`）。**11.1–11.6** 各小节中先列 **MI355X**，再列 **R9700**。**11.7** 仅为 MI355X 上 CK Tile 与 rocWMMA 对比。**11.8** 给出两套 GPU 的编译与 benchmark 复现命令。
+
+**HGEMM（RDNA 4）：** 在 gfx1201 上，多数方阵尺寸下 **`rocwmma_perf_gemm` 的 V1 顺序流水线常快于 V2 双缓冲**（与 MI355X 不同），请按形状调参。
 
 ### 11.1 GEMM 类
+
+**MI355X（gfx950）**
 
 #### 标准 HGEMM（FP16 输入，FP32 累加，FP16 输出）
 
@@ -1087,9 +1099,99 @@ Stream-K（K=4096, MT_K=16）：
 | 8  | 512  | 512  | 2048 | 3.8 |
 | 16 | 256  | 256  | 4096 | 1.2 |
 
+**Radeon AI PRO R9700（gfx1201）**
+
+#### 标准 HGEMM（FP16 入、FP32 累加、FP16 出）— `rocwmma_perf_gemm.cpp`
+
+| M | N | K | V1 顺序 | V2 双缓冲 | 说明 |
+|---|---|---|---|---|---|
+| 3840 | 4096 | 4096 | **130** TF/s | 118 TF/s | V1 更快 |
+| 4096 | 4096 | 4096 | **132** TF/s | 120 TF/s | V1 更快 |
+| 8192 | 8192 | 8192 | **133** TF/s | 123 TF/s | V1 更快 |
+| 1024 | 4096 | 8192 | **115** TF/s | 114 TF/s | 接近 |
+| 4096 | 1024 | 8192 | 105 TF/s | **118** TF/s | V2 更快 |
+
+#### Split-K GEMM — `rocwmma_gemm_splitk.cpp`
+
+| M | N | K | split_k | TFlops/s |
+|---|---|---|---|---|
+| 512 | 512 | 16384 | 4 | 1.56 |
+| 1024 | 1024 | 16384 | 8 | 0.80 |
+| 2048 | 2048 | 8192 | 4 | 0.80 |
+| 4096 | 4096 | 4096 | 2 | 0.80 |
+
+#### FP8 量化 GEMM — `rocwmma_gemm_quantized.cpp`
+
+| M | N | K | TFlops/s |
+|---|---|---|---|
+| 3840 | 4096 | 4096 | 2.39 |
+| 4096 | 4096 | 4096 | 2.39 |
+| 8192 | 8192 | 8192 | 5.13 |
+
+#### MX 格式 GEMM — `rocwmma_mx_gemm.cpp`（gfx1201 可运行；程序可能打印 “gfx950 native”）
+
+| M | N | K | MX_BLOCK | TFlops/s |
+|---|---|---|---|---|
+| 3840 | 4096 | 4096 | 32 | 3.09 |
+| 4096 | 4096 | 4096 | 32 | 3.09 |
+| 8192 | 8192 | 8192 | 32 | 5.73 |
+
+#### GEMM + 融合 Epilogue — `rocwmma_gemm_multi_d.cpp`
+
+| M | N | K | ReLU | TFlops/s |
+|---|---|---|---|---|
+| 3840 | 4096 | 4096 | No | 14.6 |
+| 4096 | 4096 | 4096 | Yes | 13.8 |
+| 8192 | 8192 | 8192 | Yes | 16.8 |
+
+#### 批量 GEMM — `rocwmma_batched_gemm.cpp`
+
+| batch | M | N | K | TFlops/s(单 batch) | 总有效 TFlops/s |
+|---|---|---|---|---|---|
+| 4 | 1024 | 1024 | 1024 | 15.4 | 61.8 |
+| 8 | 512 | 512 | 2048 | 9.15 | 73.2 |
+| 16 | 256 | 256 | 4096 | 3.85 | 61.6 |
+
+#### 分组 GEMM — `rocwmma_grouped_gemm.cpp`
+
+| G | 各组尺寸 | 总 TFlops/s |
+|---|---|---|
+| 4 | 256/512/128/768 × 4096 × 4096 (混合) | 2.65 |
+| 4 | 1024 × 4096 × 4096 (均匀) | 2.66 |
+| 3 | 512×1024/2048/4096 × 2048 | 1.38 |
+
+#### Stream-K GEMM — `rocwmma_streamk_gemm.cpp`（样例内 num_cus=32）
+
+| M | N | K | TFlops/s |
+|---|---|---|---|
+| 512 | 512 | 4096 | 2.51 |
+| 1024 | 1024 | 4096 | 4.90 |
+| 2048 | 2048 | 4096 | 5.63 |
+| 4096 | 4096 | 4096 | 5.52 |
+
+#### FlatMM — `rocwmma_flatmm.cpp`
+
+| M | N | K | LDS | TFlops/s |
+|---|---|---|---|---|
+| 128 | 4096 | 4096 | 8 KB（仅 A） | 3.10 |
+| 256 | 4096 | 4096 | 8 KB | 2.40 |
+| 512 | 4096 | 4096 | 8 KB | 2.46 |
+| 1024 | 4096 | 4096 | 8 KB | 2.58 |
+| 4096 | 4096 | 4096 | 8 KB | 2.65 |
+
+#### 批量张量收缩 — `rocwmma_batched_contraction.cpp`
+
+| G | M | N | K | TFlops/s(per group) |
+|---|---|---|---|---|
+| 4 | 1024 | 1024 | 1024 | 0.22 |
+| 8 | 512 | 512 | 2048 | 0.21 |
+| 16 | 256 | 256 | 4096 | 0.20 |
+
 ---
 
 ### 11.2 注意力类
+
+**MI355X（gfx950）**
 
 #### Flash Attention 前向
 
@@ -1111,9 +1213,29 @@ Stream-K（K=4096, MT_K=16）：
 | 4 | 32 | 4096 | 128 | 27.5% | 1125/4096  | 68.9 |
 | 4 | 32 | 8192 | 128 | 14.3% | 2341/16384 | **71.6** |
 
+**Radeon AI PRO R9700（gfx1201）**
+
+#### Flash Attention 前向 — `rocwmma_fmha_fwd.cpp`
+
+| B | H | Sq | Sk | D | Causal | TFlops/s |
+|---|---|---|---|---|---|---|
+| 4 | 32 | 2048 | 2048 | 128 | No | 19.3 |
+| 4 | 32 | 2048 | 2048 | 128 | Yes | **36.4** |
+| 1 | 32 | 4096 | 4096 | 128 | Yes | **36.8** |
+
+#### 稀疏注意力 — `rocwmma_sparse_attn.cpp`
+
+| B | H | Sq/Sk | D | 密度 | 有效块对 | TFlops/s |
+|---|---|---|---|---|---|---|
+| 4 | 32 | 2048 | 128 | 79.4% | 813/1024 | 6.28 |
+| 4 | 32 | 4096 | 128 | 27.5% | 1125/4096 | 5.42 |
+| 4 | 32 | 8192 | 128 | 14.3% | 2341/16384 | 5.62 |
+
 ---
 
 ### 11.3 规范化类
+
+**MI355X（gfx950）**
 
 #### LayerNorm 2D（Welford在线方差 + 向量化IO）
 
@@ -1147,9 +1269,39 @@ Stream-K（K=4096, MT_K=16）：
 | 3328 | 4096 | **3929 GB/s** |
 | 3328 | 8192 | 4069 GB/s |
 
+**Radeon AI PRO R9700（gfx1201）**
+
+#### LayerNorm 2D — `rocwmma_layernorm2d.cpp`
+
+| M | N | 带宽 |
+|---|---|---|
+| 3328 | 1024 | 238 GB/s |
+| 3328 | 2048 | 480 GB/s |
+| 3328 | 4096 | **548** GB/s |
+| 3328 | 8192 | 426 GB/s |
+
+#### RMSNorm 2D — `rocwmma_rmsnorm2d.cpp`
+
+| M | N | 操作 | 带宽 |
+|---|---|---|---|
+| 3328 | 4096 | RMSNorm | **1368** GB/s |
+| 3328 | 4096 | Add+RMSNorm | 487 GB/s |
+| 3328 | 8192 | RMSNorm | 477 GB/s |
+
+#### SmoothQuant — `rocwmma_smoothquant.cpp`
+
+| M | N | 带宽 |
+|---|---|---|
+| 3328 | 1024 | 328 GB/s |
+| 3328 | 2048 | 1010 GB/s |
+| 3328 | 4096 | **1249** GB/s |
+| 3328 | 8192 | 509–551 GB/s |
+
 ---
 
 ### 11.4 MoE 类
+
+**MI355X（gfx950）**
 
 #### TopK Softmax（warp-per-token）
 
@@ -1190,9 +1342,47 @@ Stream-K（K=4096, MT_K=16）：
 |---|---|---|---|---|---|
 | 3328 | 4096 | 14336 | 8 | 2 | **110** |
 
+**Radeon AI PRO R9700（gfx1201）**
+
+#### TopK Softmax — `rocwmma_topk_softmax.cpp`
+
+| tokens | experts | topk | 带宽 |
+|---|---|---|---|
+| 3328 | 8 | 2 | 11.6 GB/s |
+| 3328 | 16 | 2 | 17.3 GB/s |
+| 3328 | 32 | 5 | 24.2 GB/s |
+| 3328 | 64 | 5 | 40.1 GB/s |
+
+#### MoE Token 排序 — `rocwmma_moe_sorting.cpp`
+
+| tokens | experts | topk | 带宽 |
+|---|---|---|---|
+| 3328 | 8 | 4 | 7.67 GB/s |
+| 3328 | 32 | 4 | 7.50 GB/s |
+| 3328 | 64 | 5 | 8.64 GB/s |
+| 3328 | 128 | 8 | 12.4 GB/s |
+
+#### MoE SmoothQuant — `rocwmma_moe_smoothquant.cpp`
+
+| tokens | hidden | experts | topk | 带宽 |
+|---|---|---|---|---|
+| 3328 | 4096 | 8 | 2 | **940** GB/s |
+| 3328 | 4096 | 32 | 5 | 430 GB/s |
+| 3328 | 8192 | 64 | 5 | 483 GB/s |
+
+#### 全融合 MoE — `rocwmma_fused_moe.cpp`
+
+| tokens | hidden | inter | experts | topk | TFlops/s |
+|---|---|---|---|---|---|
+| 3328 | 4096 | 14336 | 8 | 2 | 10.9 |
+| 3328 | 4096 | 14336 | 32 | 5 | 9.56 |
+| 3328 | 7168 | 2048 | 64 | 6 | 17.3 |
+
 ---
 
 ### 11.5 Reduction & Elementwise 类
+
+**MI355X（gfx950）**
 
 #### Row Reduction（Sum/Max）
 
@@ -1215,9 +1405,30 @@ Stream-K（K=4096, MT_K=16）：
 | 3840 | 4096 | Square2D    | 1622 GB/s |
 | 3840 | 4096 | Transpose2D | **2588 GB/s** |
 
+**Radeon AI PRO R9700（gfx1201）**
+
+#### Row Reduction — `rocwmma_reduce.cpp`
+
+| M | N | ReduceSum | ReduceMax |
+|---|---|---|---|
+| 3328 | 1024 | 660 GB/s | 646 GB/s |
+| 3328 | 2048 | 1333 GB/s | 1292 GB/s |
+| 3328 | 4096 | **1747** GB/s | 1715 GB/s |
+| 3328 | 8192 | 1987 GB/s | 1987 GB/s |
+
+#### Elementwise — `rocwmma_elementwise.cpp`（M=3840, N=4096）
+
+| 操作 | 带宽 |
+|---|---|
+| Add2D | 375 GB/s |
+| Square2D | 1367 GB/s |
+| Transpose2D | 260 GB/s |
+
 ---
 
 ### 11.6 卷积 & 数据布局类
+
+**MI355X（gfx950）**
 
 #### 分组卷积前向（Im2col + rocWMMA GEMM）
 
@@ -1249,6 +1460,33 @@ Stream-K（K=4096, MT_K=16）：
 | 2 | 16×28×28 | 256 | 2×2×2 | **2123 GB/s** | 1999 GB/s |
 | 2 | 8×56×56  | 128 | 3×3×3 | 196 GB/s | 194 GB/s |
 
+**Radeon AI PRO R9700（gfx1201）**
+
+#### 分组卷积前向 — `rocwmma_grouped_conv_fwd.cpp`
+
+| N | H×W | G | Cin | Cout | K | TFlops/s |
+|---|---|---|---|---|---|---|
+| 8 | 56×56 | 1 | 64 | 64 | 3×3 | 0.18 |
+| 8 | 28×28 | 1 | 128 | 128 | 3×3 | 0.83 |
+| 8 | 14×14 | 1 | 256 | 256 | 3×3 | 2.11 |
+| 8 | 7×7 | 1 | 512 | 512 | 3×3 | 1.47 |
+
+#### Permute — `rocwmma_permute.cpp`
+
+| 操作 | 形状 | 带宽 |
+|---|---|---|
+| Transpose2D | 3840×4096 | 515 GB/s |
+| Transpose2D | 4096×4096 | 518 GB/s |
+| Transpose2D | 8192×8192 | 171 GB/s |
+| NCHW→NHWC | N=32, C=128, H=W=64 | **534** GB/s |
+
+#### 3D Pooling — `rocwmma_pooling.cpp`
+
+| N | D×H×W | C | K | MaxPool | AvgPool |
+|---|---|---|---|---|---|
+| 2 | 16×28×28 | 256 | 2×2×2 | **552** GB/s | 528 GB/s |
+| 2 | 8×56×56 | 128 | 3×3×3 | 48.4 GB/s | 47.1 GB/s |
+
 ---
 
 ### 11.7 CK Tile vs rocWMMA 对比（HGEMM，M=N=K=4096）
@@ -1264,6 +1502,22 @@ Stream-K（K=4096, MT_K=16）：
 > **注：** CK Tile 使用 256×256 更大的 block tile（需 64KB LDS）并应用
 > `-mllvm -enable-noalias-to-md-conversion=0` 等底层编译器 flag，
 > rocWMMA 使用标准 HIP 编译路径（128×128 block tile，16KB LDS）。
+
+### 11.8 复现 benchmark（MI355X 与 R9700）
+
+```bash
+cd /home/optimized_rocwmma_samples   # 或你的克隆路径
+
+# MI355X / CDNA（示例目标）
+./build.sh -g gfx950
+./benchmark.sh -b build --csv -o benchmark_results_mi355x.txt --timeout 300
+
+# Radeon AI PRO R9700 / RDNA 4（gfx1201）
+./build.sh -g gfx1201
+./benchmark.sh -b build --csv -o benchmark_results_r9700_gfx1201.txt --timeout 300
+```
+
+需要 CMake ≥3.16 与完整 ROCm（`HIPConfig.cmake` 位于 `$ROCM_PATH/lib/cmake/hip`）。工程会将 `/opt/rocm`（或 `$ROCM_PATH`）置于 `CMAKE_PREFIX_PATH` 前部，以便 `find_package(HIP)` 在常见环境下成功。
 
 ---
 
@@ -1579,3 +1833,239 @@ Stream-K（K=4096, MT_K=16）：
 - CK Tile 在 **计算密集型**（大方阵 GEMM）和 **codegen 规范化**（LayerNorm、RMSNorm）场景绝对领先
 - rocWMMA 在 **内存密集型**（Transpose、Row Reduce）和部分**量化**（SmoothQuant N≥2048）场景表现更优
 - 对于生产环境建议使用 CK Tile；rocWMMA 样例适合快速原型、教学与 RDNA4 移植
+
+---
+
+## 13. AMD Radeon AI PRO R9700（gfx1201）实测结果
+
+下列数据在 **AMD Radeon AI PRO R9700**（gfx1201）上测量，ROCm **7.2.0**，命令：`./build.sh -g gfx1201` 与 `./benchmark.sh -b build --csv -o benchmark_results_r9700_gfx1201.txt`（每 sample 超时 300s）。报告日期：**2026-04-07**。原始输出见本目录 `benchmark_results_r9700_gfx1201.txt` / `.csv`。
+
+**HGEMM 流水线说明（RDNA 4）：** 与 MI355X（gfx950）不同，在 gfx1201 上多数默认方阵尺寸下 **`rocwmma_perf_gemm` 的 V1 顺序流水线快于 V2 双缓冲**；仅在部分扁长 tile（如 M=4096, N=1024, K=8192）V2 更优。请按实际算子调参。
+
+### 13.1 GEMM 类
+
+#### 标准 HGEMM（FP16 入、FP32 累加、FP16 出）— `rocwmma_perf_gemm.cpp`
+
+| M | N | K | V1 顺序 | V2 双缓冲 | 说明 |
+|---|---|---|---|---|---|
+| 3840 | 4096 | 4096 | **130** TF/s | 118 TF/s | V1 更快 |
+| 4096 | 4096 | 4096 | **132** TF/s | 120 TF/s | V1 更快 |
+| 8192 | 8192 | 8192 | **133** TF/s | 123 TF/s | V1 更快 |
+| 1024 | 4096 | 8192 | **115** TF/s | 114 TF/s | 接近 |
+| 4096 | 1024 | 8192 | 105 TF/s | **118** TF/s | V2 更快 |
+
+#### Split-K GEMM — `rocwmma_gemm_splitk.cpp`
+
+| M | N | K | split_k | TFlops/s |
+|---|---|---|---|---|
+| 512 | 512 | 16384 | 4 | 1.56 |
+| 1024 | 1024 | 16384 | 8 | 0.80 |
+| 2048 | 2048 | 8192 | 4 | 0.80 |
+| 4096 | 4096 | 4096 | 2 | 0.80 |
+
+#### FP8 量化 GEMM — `rocwmma_gemm_quantized.cpp`
+
+| M | N | K | TFlops/s |
+|---|---|---|---|
+| 3840 | 4096 | 4096 | 2.39 |
+| 4096 | 4096 | 4096 | 2.39 |
+| 8192 | 8192 | 8192 | 5.13 |
+
+#### MX 格式 GEMM — `rocwmma_mx_gemm.cpp`（在 gfx1201 上可运行；程序输出仍标注 “gfx950 native”）
+
+| M | N | K | MX_BLOCK | TFlops/s |
+|---|---|---|---|---|
+| 3840 | 4096 | 4096 | 32 | 3.09 |
+| 4096 | 4096 | 4096 | 32 | 3.09 |
+| 8192 | 8192 | 8192 | 32 | 5.73 |
+
+#### GEMM + 融合 Epilogue — `rocwmma_gemm_multi_d.cpp`
+
+| M | N | K | ReLU | TFlops/s |
+|---|---|---|---|---|
+| 3840 | 4096 | 4096 | No | 14.6 |
+| 4096 | 4096 | 4096 | Yes | 13.8 |
+| 8192 | 8192 | 8192 | Yes | 16.8 |
+
+#### 批量 GEMM — `rocwmma_batched_gemm.cpp`
+
+| batch | M | N | K | TFlops/s(单 batch) | 总有效 TFlops/s |
+|---|---|---|---|---|---|
+| 4 | 1024 | 1024 | 1024 | 15.4 | 61.8 |
+| 8 | 512 | 512 | 2048 | 9.15 | 73.2 |
+| 16 | 256 | 256 | 4096 | 3.85 | 61.6 |
+
+#### 分组 GEMM — `rocwmma_grouped_gemm.cpp`
+
+| G | 各组尺寸 | 总 TFlops/s |
+|---|---|---|
+| 4 | 256/512/128/768 × 4096 × 4096 (混合) | 2.65 |
+| 4 | 1024 × 4096 × 4096 (均匀) | 2.66 |
+| 3 | 512×1024/2048/4096 × 2048 | 1.38 |
+
+#### Stream-K GEMM — `rocwmma_streamk_gemm.cpp`（样例内 num_cus=32）
+
+| M | N | K | TFlops/s |
+|---|---|---|---|
+| 512 | 512 | 4096 | 2.51 |
+| 1024 | 1024 | 4096 | 4.90 |
+| 2048 | 2048 | 4096 | 5.63 |
+| 4096 | 4096 | 4096 | 5.52 |
+
+#### FlatMM — `rocwmma_flatmm.cpp`
+
+| M | N | K | LDS | TFlops/s |
+|---|---|---|---|---|
+| 128 | 4096 | 4096 | 8 KB（仅 A） | 3.10 |
+| 256 | 4096 | 4096 | 8 KB | 2.40 |
+| 512 | 4096 | 4096 | 8 KB | 2.46 |
+| 1024 | 4096 | 4096 | 8 KB | 2.58 |
+| 4096 | 4096 | 4096 | 8 KB | 2.65 |
+
+#### 批量张量收缩 — `rocwmma_batched_contraction.cpp`
+
+| G | M | N | K | TFlops/s(per group) |
+|---|---|---|---|---|
+| 4 | 1024 | 1024 | 1024 | 0.22 |
+| 8 | 512 | 512 | 2048 | 0.21 |
+| 16 | 256 | 256 | 4096 | 0.20 |
+
+### 13.2 注意力类
+
+#### Flash Attention 前向 — `rocwmma_fmha_fwd.cpp`
+
+| B | H | Sq | Sk | D | Causal | TFlops/s |
+|---|---|---|---|---|---|---|
+| 4 | 32 | 2048 | 2048 | 128 | No | 19.3 |
+| 4 | 32 | 2048 | 2048 | 128 | Yes | **36.4** |
+| 1 | 32 | 4096 | 4096 | 128 | Yes | **36.8** |
+
+#### 稀疏注意力 — `rocwmma_sparse_attn.cpp`
+
+| B | H | Sq/Sk | D | 密度 | 有效块对 | TFlops/s |
+|---|---|---|---|---|---|---|
+| 4 | 32 | 2048 | 128 | 79.4% | 813/1024 | 6.28 |
+| 4 | 32 | 4096 | 128 | 27.5% | 1125/4096 | 5.42 |
+| 4 | 32 | 8192 | 128 | 14.3% | 2341/16384 | 5.62 |
+
+### 13.3 规范化类
+
+#### LayerNorm 2D — `rocwmma_layernorm2d.cpp`
+
+| M | N | 带宽 |
+|---|---|---|
+| 3328 | 1024 | 238 GB/s |
+| 3328 | 2048 | 480 GB/s |
+| 3328 | 4096 | **548** GB/s |
+| 3328 | 8192 | 426 GB/s |
+
+#### RMSNorm 2D — `rocwmma_rmsnorm2d.cpp`
+
+| M | N | 操作 | 带宽 |
+|---|---|---|---|
+| 3328 | 4096 | RMSNorm | **1368** GB/s |
+| 3328 | 4096 | Add+RMSNorm | 487 GB/s |
+| 3328 | 8192 | RMSNorm | 477 GB/s |
+
+#### SmoothQuant — `rocwmma_smoothquant.cpp`
+
+| M | N | 带宽 |
+|---|---|---|
+| 3328 | 1024 | 328 GB/s |
+| 3328 | 2048 | 1010 GB/s |
+| 3328 | 4096 | **1249** GB/s |
+| 3328 | 8192 | 509–551 GB/s |
+
+### 13.4 MoE 类
+
+#### TopK Softmax — `rocwmma_topk_softmax.cpp`
+
+| tokens | experts | topk | 带宽 |
+|---|---|---|---|
+| 3328 | 8 | 2 | 11.6 GB/s |
+| 3328 | 16 | 2 | 17.3 GB/s |
+| 3328 | 32 | 5 | 24.2 GB/s |
+| 3328 | 64 | 5 | 40.1 GB/s |
+
+#### MoE Token 排序 — `rocwmma_moe_sorting.cpp`
+
+| tokens | experts | topk | 带宽 |
+|---|---|---|---|
+| 3328 | 8 | 4 | 7.67 GB/s |
+| 3328 | 32 | 4 | 7.50 GB/s |
+| 3328 | 64 | 5 | 8.64 GB/s |
+| 3328 | 128 | 8 | 12.4 GB/s |
+
+#### MoE SmoothQuant — `rocwmma_moe_smoothquant.cpp`
+
+| tokens | hidden | experts | topk | 带宽 |
+|---|---|---|---|---|
+| 3328 | 4096 | 8 | 2 | **940** GB/s |
+| 3328 | 4096 | 32 | 5 | 430 GB/s |
+| 3328 | 8192 | 64 | 5 | 483 GB/s |
+
+#### 全融合 MoE — `rocwmma_fused_moe.cpp`
+
+| tokens | hidden | inter | experts | topk | TFlops/s |
+|---|---|---|---|---|---|
+| 3328 | 4096 | 14336 | 8 | 2 | 10.9 |
+| 3328 | 4096 | 14336 | 32 | 5 | 9.56 |
+| 3328 | 7168 | 2048 | 64 | 6 | 17.3 |
+
+### 13.5 Reduction、Elementwise、卷积、Permute、Pooling
+
+#### Row Reduction — `rocwmma_reduce.cpp`
+
+| M | N | ReduceSum | ReduceMax |
+|---|---|---|---|
+| 3328 | 1024 | 660 GB/s | 646 GB/s |
+| 3328 | 2048 | 1333 GB/s | 1292 GB/s |
+| 3328 | 4096 | **1747** GB/s | 1715 GB/s |
+| 3328 | 8192 | 1987 GB/s | 1987 GB/s |
+
+#### Elementwise — `rocwmma_elementwise.cpp`（M=3840, N=4096）
+
+| 操作 | 带宽 |
+|---|---|
+| Add2D | 375 GB/s |
+| Square2D | 1367 GB/s |
+| Transpose2D | 260 GB/s |
+
+#### 分组卷积前向 — `rocwmma_grouped_conv_fwd.cpp`
+
+| N | H×W | G | Cin | Cout | K | TFlops/s |
+|---|---|---|---|---|---|---|
+| 8 | 56×56 | 1 | 64 | 64 | 3×3 | 0.18 |
+| 8 | 28×28 | 1 | 128 | 128 | 3×3 | 0.83 |
+| 8 | 14×14 | 1 | 256 | 256 | 3×3 | 2.11 |
+| 8 | 7×7 | 1 | 512 | 512 | 3×3 | 1.47 |
+
+#### Permute — `rocwmma_permute.cpp`
+
+| 操作 | 形状 | 带宽 |
+|---|---|---|
+| Transpose2D | 3840×4096 | 515 GB/s |
+| Transpose2D | 4096×4096 | 518 GB/s |
+| Transpose2D | 8192×8192 | 171 GB/s |
+| NCHW→NHWC | N=32, C=128, H=W=64 | **534** GB/s |
+
+#### 3D Pooling — `rocwmma_pooling.cpp`
+
+| N | D×H×W | C | K | MaxPool | AvgPool |
+|---|---|---|---|---|---|
+| 2 | 16×28×28 | 256 | 2×2×2 | **552** GB/s | 528 GB/s |
+| 2 | 8×56×56 | 128 | 3×3×3 | 48.4 GB/s | 47.1 GB/s |
+
+### 13.6 编译与复现（R9700 / gfx1201）
+
+```bash
+cd /home/optimized_rocwmma_samples   # 或你的克隆路径
+
+# RDNA 4 — R9700 对应 gfx1201（可用: rocminfo | grep -E "Marketing Name|Name:.*gfx"）
+./build.sh -g gfx1201
+
+./benchmark.sh -b build --csv -o benchmark_results_r9700_gfx1201.txt --timeout 300
+```
+
+需要 CMake ≥3.16 与完整 ROCm（`HIPConfig.cmake` 位于 `$ROCM_PATH/lib/cmake/hip`）。工程会将 `/opt/rocm`（或环境变量 `ROCM_PATH`）置于 `CMAKE_PREFIX_PATH` 前部，以便 `find_package(HIP)` 在常见 Linux 安装下可直接成功。
+
