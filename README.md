@@ -12,7 +12,7 @@ All samples are located at: `rocwmma/samples/community/rocwmma_*.cpp`
 | Item | MI355X (gfx950) | Radeon AI PRO R9700 (gfx1201) |
 |---|---|---|
 | **GPU** | AMD Instinct MI355X (×8) | AMD Radeon AI PRO R9700 |
-| **Architecture** | CDNA 3.5, 256 CUs, 2400 MHz | RDNA 4, 64 CUs, Wave32, WMMA 16×16×16 (boost up to 2.92 GHz) |
+| **Architecture** | CDNA 4, 256 CUs, 2400 MHz | RDNA 4, 64 CUs, Wave32, WMMA 16×16×16 (boost up to 2.92 GHz) |
 | **ROCm** | 7.2.0 | 7.2.0 |
 | **Compiler** | AMD Clang 22.0.0 (HIP 7.2) | AMD Clang 22.0.0 (HIP 7.2) |
 | **rocWMMA** | 2.2.0 | 2.2.0 |
