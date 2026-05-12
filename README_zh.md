@@ -12,13 +12,13 @@
 | 项目 | MI355X（gfx950） | Radeon AI PRO R9700（gfx1201） |
 |---|---|---|
 | **GPU** | AMD Instinct MI355X（×8） | AMD Radeon AI PRO R9700 |
-| **架构** | CDNA 3.5，256 CUs，2400 MHz | RDNA 4，64 CUs，Wave32，WMMA 16×16×16（加速频率最高约 2.92 GHz） |
+| **架构** | CDNA 4，256 CUs，2400 MHz | RDNA 4，64 CUs，Wave32，WMMA 16×16×16（加速频率最高约 2.92 GHz） |
 | **ROCm** | 7.2.0 | 7.2.0 |
 | **编译器** | AMD Clang 22.0.0（HIP 7.2） | AMD Clang 22.0.0（HIP 7.2） |
 | **rocWMMA** | 2.2.0 | 2.2.0 |
-| **FP16 峰值（矩阵）** | ~1300 TFlops/s（CDNA MFMA 量级） | **191** TFlops/s（[AMD 规格页](https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html)，FP16 matrix） |
-| **FP8 峰值（矩阵，E4M3/E5M2）** | ~2600 TFlops/s（CDNA 量级） | **383** TFlops/s（同上，FP8 matrix） |
-| **样例 benchmark** | 见 §11（MI355X 表） | 测量日期 **2026-04-07**；日志 `benchmark_results_r9700_gfx1201.txt` / `.csv` |
+| **FP16 峰值（矩阵）** | ~2500 TFlops/s（CDNA Matrix Core） | **191** TFlops/s（[AMD 规格页](https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html)，FP16 matrix） |
+| **FP8 峰值（矩阵，E4M3/E5M2）** | ~5000 TFlops/s（CDNA Matrix Core） | **383** TFlops/s（同上，FP8 matrix） |
+
 
 两套 GPU 的实测吞吐均在 **[第 11 节](#11-完整性能数据)**（各小节先 MI355X、后 R9700）。表中峰值为厂商给出的理论上限，实际可达 TFlops 取决于算子与访存。
 
