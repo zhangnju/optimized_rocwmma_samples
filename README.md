@@ -11,14 +11,13 @@ All samples are located at: `rocwmma/samples/community/rocwmma_*.cpp`
 
 | Item | MI355X (gfx950) | Radeon AI PRO R9700 (gfx1201) |
 |---|---|---|
-| **GPU** | AMD Instinct MI355X (×8) | AMD Radeon AI PRO R9700 |
+| **GPU** | AMD Instinct MI355X  | AMD Radeon AI PRO R9700 |
 | **Architecture** | CDNA 4, 256 CUs, 2400 MHz | RDNA 4, 64 CUs, Wave32, WMMA 16×16×16 (boost up to 2.92 GHz) |
 | **ROCm** | 7.2.0 | 7.2.0 |
 | **Compiler** | AMD Clang 22.0.0 (HIP 7.2) | AMD Clang 22.0.0 (HIP 7.2) |
 | **rocWMMA** | 2.2.0 | 2.2.0 |
-| **FP16 peak (matrix)** | ~1300 TFlops/s (CDNA MFMA class) | **191** TFlops/s ([AMD specs](https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html), FP16 matrix) |
-| **FP8 peak (matrix, E4M3/E5M2)** | ~2600 TFlops/s (CDNA class) | **383** TFlops/s (same source, FP8 matrix) |
-| **Sample benchmark** | See §11 (MI355X tables) | Measured **2026-04-07**; log `benchmark_results_r9700_gfx1201.txt` / `.csv` |
+| **FP16 peak (matrix)** | ~2500 TFlops/s (CDNA Matrix Core) | **191** TFlops/s ([AMD specs](https://www.amd.com/en/products/graphics/workstations/radeon-ai-pro/ai-9000-series/amd-radeon-ai-pro-r9700.html), FP16 matrix) |
+| **FP8 peak (matrix, E4M3/E5M2)** | ~5000 TFlops/s (CDNA Matrix Core) | **383** TFlops/s (same source, FP8 matrix) |
 
 Measured kernel throughputs for both GPUs are in **[Section 11](#11-complete-performance-data)** (MI355X first, R9700 second in each subsection). Manufacturer peaks are theoretical upper bounds; achievable TFlops depend on kernel and memory behavior.
 
